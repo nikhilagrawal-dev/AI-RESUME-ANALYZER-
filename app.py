@@ -1,0 +1,228 @@
+import streamlit as st
+import fitz  # PyMuPDF
+import docx
+import os
+import json
+import pandas as pd
+import plotly.express as px
+from fpdf import FPDF
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv() # Load variables from .env file
+
+import string
+
+def sanitize_for_pdf(text):
+    if not text: return ""
+    text = str(text)
+    replacements = {
+        '“': '"', '”': '"', "‘": "'", "’": "'",
+        '–': '-', '—': '-', '…': '...',
+        '•': '-', '●': '-', '★': '*', '☆': '*',
+        '\t': ' ', '\r': '', '\n': ' '
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    
+    # Strictly keep only printable ascii
+    valid_chars = set(string.printable)
+    text = ''.join(c for c in text if c in valid_chars)
+    
+    # Limit maximum word length to avoid fpdf horizontal space exceptions
+    words = text.split()
+    safe_words = [w[:90] for w in words] 
+    return " ".join(safe_words)
+
+def create_pdf_report(analysis_dict):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    
+    pdf.set_x(10)
+    pdf.cell(0, 10, "Resume Analysis Report", align='C')
+    pdf.ln(10)
+    
+    pdf.set_font("Arial", size=12)
+    pdf.set_x(10)
+    pdf.cell(0, 10, f"ATS Match: {analysis_dict.get('ats_match_percentage', 0)}%")
+    pdf.ln(10)
+    
+    assessment = sanitize_for_pdf(analysis_dict.get('assessment', ''))
+    pdf.set_x(10)
+    pdf.multi_cell(0, 10, f"Assessment: {assessment}")
+    
+    pdf.set_x(10)
+    pdf.cell(0, 10, "Strengths:")
+    pdf.ln(10)
+    for s in analysis_dict.get('strengths', []):
+        pdf.set_x(10)
+        pdf.multi_cell(0, 10, f"- {sanitize_for_pdf(s)}")
+        
+    pdf.set_x(10)
+    pdf.cell(0, 10, "Weaknesses:")
+    pdf.ln(10)
+    for w in analysis_dict.get('weaknesses', []):
+        pdf.set_x(10)
+        pdf.multi_cell(0, 10, f"- {sanitize_for_pdf(w)}")
+        
+    out = pdf.output()
+    return bytes(out) if not isinstance(out, bytes) else out
+
+# --- Configure API Key ---
+api_key = os.environ.get("GEMINI_API_KEY")
+
+if api_key:
+    genai.configure(api_key=api_key)
+
+# --- File Readers ---
+def read_pdf(file):
+    text = ""
+    pdf = fitz.open(stream=file.read(), filetype="pdf")
+    for page in pdf:
+        text += page.get_text()
+    return text
+
+def read_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
+
+def extract_text(uploaded_file):
+    if uploaded_file.name.endswith(".pdf"):
+        return read_pdf(uploaded_file)
+    elif uploaded_file.name.endswith(".docx"):
+        return read_docx(uploaded_file)
+    else:
+        return "Unsupported file format. Please upload a .pdf or .docx file."
+
+# --- Google Generative AI Call ---
+def analyze_resume(resume_text, job_description):
+    prompt = f"""
+    You are a resume evaluation expert. Analyze the following resume:
+    {resume_text}
+    in the context of this job description:
+    {job_description}
+    
+    Return ONLY a valid JSON object (no markdown formatting, no backticks) with the following exact keys:
+    {{
+      "ats_match_percentage": <int 0-100 indicating overall alignment>,
+      "technical_score": <int 0-100>,
+      "leadership_score": <int 0-100>,
+      "communication_score": <int 0-100>,
+      "found_keywords": ["keyword1", "keyword2"],
+      "missing_keywords": ["keyword1", "keyword2"],
+      "assessment": "<short overall assessment string>",
+      "strengths": ["strength1", "strength2"],
+      "weaknesses": ["weakness1", "weakness2"],
+      "actionable_suggestions": ["suggestion1"]
+    }}
+    """
+
+    generation_config = {"response_mime_type": "application/json"}
+    model = genai.GenerativeModel("gemini-2.5-flash", generation_config=generation_config)
+    try:
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
+    except Exception as e:
+        if "404" in str(e):
+            models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            raise Exception(f"Model not found. Available models for your API key: {', '.join(models)}")
+        raise e
+
+# --- Streamlit UI ---
+st.set_page_config(page_title="AI Resume Analyzer", layout="wide")
+st.title("📄 AI-Powered Resume Analyzer")
+
+with st.sidebar:
+    st.header("Upload Files")
+    resume_file = st.file_uploader("Upload Resume (.pdf or .docx)", type=["pdf", "docx"])
+    jd_file = st.file_uploader("Upload Job Description (.pdf or .docx)", type=["pdf", "docx"])
+
+analyze_button = st.button("🔍 Analyze Resume")
+
+if analyze_button and resume_file and jd_file:
+    api_key_val = api_key and api_key.strip()
+    if not api_key_val:
+        st.error("⚠️ The GEMINI_API_KEY environment variable is not set. Please restart the app with this variable set.")
+    elif not api_key_val.startswith("AIza"):
+        st.error("⚠️ The GEMINI_API_KEY environment variable doesn't look like a valid Google Gemini key (it should start with 'AIza').")
+    else:
+        with st.spinner("Extracting text and analyzing..."):
+            try:
+                resume_text = extract_text(resume_file)
+                job_text = extract_text(jd_file)
+                
+                # Cache for chat
+                st.session_state.resume_text_cache = resume_text
+                st.session_state.job_text_cache = job_text
+                
+                analysis = analyze_resume(resume_text, job_text)
+                st.session_state.last_analysis = analysis
+                st.balloons()
+            except Exception as e:
+                st.error(f"⚠️ {str(e)}")
+
+elif analyze_button:
+    st.warning("Please upload both resume and job description to proceed.")
+
+# --- Display Results & Chat ---
+if "last_analysis" in st.session_state:
+    analysis = st.session_state.last_analysis
+    st.success(f"### Overall ATS Match: {analysis.get('ats_match_percentage', 0)}%")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📊 Skills Breakdown")
+        df = pd.DataFrame(dict(
+            r=[analysis.get('technical_score', 0), analysis.get('leadership_score', 0), analysis.get('communication_score', 0)],
+            theta=['Technical', 'Leadership', 'Communication']
+        ))
+        fig = px.line_polar(df, r='r', theta='theta', line_close=True)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col2:
+        st.subheader("🔑 ATS Keywords")
+        st.write("**✅ Found:** " + ", ".join(analysis.get('found_keywords', [])))
+        st.write("**❌ Missing:** " + ", ".join(analysis.get('missing_keywords', [])))
+
+    st.subheader("📝 Summary")
+    st.write(analysis.get('assessment', ''))
+    
+    st.markdown("### 🌟 Strengths")
+    for s in analysis.get('strengths', []):
+        st.write(f"- {s}")
+        
+    st.markdown("### ⚠️ Weaknesses")
+    for w in analysis.get('weaknesses', []):
+        st.write(f"- {w}")
+
+    pdf_bytes = create_pdf_report(analysis)
+    st.download_button(label="📥 Export to PDF", data=pdf_bytes, file_name="resume_analysis.pdf", mime="application/pdf")
+
+    st.markdown("---")
+    st.subheader("💬 Chat with this Resume")
+    
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+        
+    for msg in st.session_state.chat_history:
+        st.chat_message(msg["role"]).write(msg["text"])
+        
+    if user_q := st.chat_input("Ask a question about this resume..."):
+        st.chat_message("user").write(user_q)
+        st.session_state.chat_history.append({"role": "user", "text": user_q})
+        
+        qa_prompt = f"Resume:\n{st.session_state.resume_text_cache}\n\nQuestion: {user_q}"
+        qa_model = genai.GenerativeModel("gemini-2.5-flash")
+        try:
+            answer_obj = qa_model.generate_content(qa_prompt)
+            st.chat_message("assistant").write(answer_obj.text)
+            st.session_state.chat_history.append({"role": "assistant", "text": answer_obj.text})
+        except Exception as e:
+            st.error(f"Chat Error: {e}")
+
+# Footer
+st.markdown("""
+---
+Made with ❤️ using Streamlit and Gemini Pro
+""")
