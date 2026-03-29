@@ -96,6 +96,50 @@ def extract_text(uploaded_file):
         return "Unsupported file format. Please upload a .pdf or .docx file."
 
 # --- Google Generative AI Call ---
+def get_job_recommendations(resume_text):
+    prompt = f"""
+    You are a career advisor. Based on the following resume, suggest 3 to 5 job roles that best match this candidate's skills and experience.
+    Resume:
+    {resume_text}
+
+    Return ONLY a valid JSON array (no markdown, no backticks) of objects with these exact keys:
+    [
+      {{
+        "title": "<job title>",
+        "why_it_fits": "<1-2 sentence explanation>",
+        "where_to_apply": "<suggested platforms or company types e.g. LinkedIn, startups, FAANG>"
+      }}
+    ]
+    """
+    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+    try:
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
+    except Exception as e:
+        raise e
+
+def get_improvement_tips(resume_text, job_description):
+    prompt = f"""
+    You are an expert resume coach. Analyze the resume below and give specific, actionable improvement advice.
+    Resume:
+    {resume_text}
+    Job Description:
+    {job_description}
+
+    Return ONLY a valid JSON object (no markdown, no backticks) with these exact keys:
+    {{
+      "bullet_rewrites": ["<original bullet> → <improved version>"],
+      "skills_to_add": ["skill or certification to pursue"],
+      "formatting_tips": ["formatting or structure tip"]
+    }}
+    """
+    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+    try:
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
+    except Exception as e:
+        raise e
+
 def analyze_resume(resume_text, job_description):
     prompt = f"""
     You are a resume evaluation expert. Analyze the following resume:
@@ -196,6 +240,57 @@ if "last_analysis" in st.session_state:
     for w in analysis.get('weaknesses', []):
         st.write(f"- {w}")
 
+    # --- Job Role Recommendations ---
+    st.markdown("---")
+    st.subheader("💼 Job Role Recommendations")
+    if "job_recommendations" not in st.session_state:
+        if st.button("🔍 Get Job Recommendations"):
+            with st.spinner("Finding best-matching roles..."):
+                try:
+                    recs = get_job_recommendations(st.session_state.resume_text_cache)
+                    st.session_state.job_recommendations = recs
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    else:
+        for rec in st.session_state.job_recommendations:
+            with st.expander(f"🏷️ {rec.get('title', 'Role')}"):
+                st.write(f"**Why it fits:** {rec.get('why_it_fits', '')}")
+                st.write(f"**Where to apply:** {rec.get('where_to_apply', '')}")
+        if st.button("🔄 Refresh Recommendations"):
+            del st.session_state.job_recommendations
+            st.rerun()
+
+    # --- Resume Improvement Coach ---
+    st.markdown("---")
+    st.subheader("🛠️ Resume Improvement Coach")
+    if "improvement_tips" not in st.session_state:
+        if st.button("💡 Get Improvement Tips"):
+            with st.spinner("Analyzing and generating tips..."):
+                try:
+                    tips = get_improvement_tips(
+                        st.session_state.resume_text_cache,
+                        st.session_state.job_text_cache
+                    )
+                    st.session_state.improvement_tips = tips
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    else:
+        tips = st.session_state.improvement_tips
+        st.markdown("**✏️ Bullet Point Rewrites:**")
+        for b in tips.get("bullet_rewrites", []):
+            st.write(f"- {b}")
+        st.markdown("**📚 Skills & Certifications to Add:**")
+        for s in tips.get("skills_to_add", []):
+            st.write(f"- {s}")
+        st.markdown("**📐 Formatting & Structure Tips:**")
+        for f in tips.get("formatting_tips", []):
+            st.write(f"- {f}")
+        if st.button("🔄 Refresh Tips"):
+            del st.session_state.improvement_tips
+            st.rerun()
+
     pdf_bytes = create_pdf_report(analysis)
     st.download_button(label="📥 Export to PDF", data=pdf_bytes, file_name="resume_analysis.pdf", mime="application/pdf")
 
@@ -221,8 +316,4 @@ if "last_analysis" in st.session_state:
         except Exception as e:
             st.error(f"Chat Error: {e}")
 
-# Footer
-st.markdown("""
----
-Made with ❤️ using Streamlit and Gemini Pro
-""")
+
