@@ -8,6 +8,7 @@ import plotly.express as px
 from fpdf import FPDF
 import google.generativeai as genai
 from dotenv import load_dotenv
+import ai_optimizer
 
 load_dotenv() # Load variables from .env file
 
@@ -293,6 +294,51 @@ if "last_analysis" in st.session_state:
 
     pdf_bytes = create_pdf_report(analysis)
     st.download_button(label="📥 Export to PDF", data=pdf_bytes, file_name="resume_analysis.pdf", mime="application/pdf")
+
+    # --- Resume Score Optimizer (Hill Climbing) ---
+    st.markdown("---")
+    st.subheader("🚀 Resume Score Optimizer (Hill Climbing)")
+    st.info("Improve your ATS score by iteratively adding high-impact keywords and replacing weak ones.")
+    
+    if st.button("📈 Optimize Resume Score"):
+        with st.spinner("Running Hill Climbing Optimization..."):
+            try:
+                found = analysis.get('found_keywords', [])
+                missing = analysis.get('missing_keywords', [])
+                jd_text = st.session_state.job_text_cache
+                
+                results = ai_optimizer.hill_climbing_optimize(found, missing, jd_text)
+                st.session_state.optimization_results = results
+                st.rerun()
+            except Exception as e:
+                st.error(f"Optimization Error: {e}")
+                
+    if "optimization_results" in st.session_state:
+        res = st.session_state.optimization_results
+        
+        col_opt1, col_opt2 = st.columns(2)
+        with col_opt1:
+            st.metric("Original Score", f"{res['original_score']}%")
+        with col_opt2:
+            st.metric("Optimized Score", f"{res['optimized_score']}%", delta=f"{res['optimized_score'] - res['original_score']}%")
+            
+        st.markdown("### 🛠️ Suggested Improvements")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            if res['added']:
+                st.success("**✅ Keywords to Add:**\n\n" + ", ".join(res['added']))
+        with c2:
+            if res['removed']:
+                st.warning("**❌ Keywords to Replace:**\n\n" + ", ".join(res['removed']))
+                
+        with st.expander("📝 Step-by-Step Optimization History"):
+            for step in res['history']:
+                st.write(f"- {step}")
+                
+        if st.button("🔄 Reset Optimization"):
+            del st.session_state.optimization_results
+            st.rerun()
 
     st.markdown("---")
     st.subheader("💬 Chat with this Resume")
