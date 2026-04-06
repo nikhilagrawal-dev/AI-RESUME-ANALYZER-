@@ -154,8 +154,8 @@ def analyze_resume(resume_text, job_description):
       "technical_score": <int 0-100>,
       "leadership_score": <int 0-100>,
       "communication_score": <int 0-100>,
-      "found_keywords": ["keyword1", "keyword2"],
-      "missing_keywords": ["keyword1", "keyword2"],
+      "found_keywords": ["provide a comprehensive list of at least 15-20 labels found including technical skills, tools, and industry terms (Exclude generic buzzwords like 'motivated', 'detail-oriented', 'hard-working')"],
+      "missing_keywords": ["provide an exhaustive list of at least 15-20 labels missing from the resume but required by the JD (Exclude generic buzzwords like 'motivated', 'detail-oriented', 'hard-working')"],
       "assessment": "<short overall assessment string>",
       "strengths": ["strength1", "strength2"],
       "weaknesses": ["weakness1", "weakness2"],
@@ -299,6 +299,12 @@ if "last_analysis" in st.session_state:
     st.subheader("🚀 Resume Score Optimizer (Hill Climbing)")
     st.info("Improve your ATS score by iteratively adding high-impact keywords and replacing weak ones.")
     
+    col_cfg1, col_cfg2 = st.columns(2)
+    with col_cfg1:
+        max_k = st.slider("Max Keywords to Add", 1, 15, 5)
+    with col_cfg2:
+        tgt_s = st.slider("Target ATS Score %", 50, 100, 90)
+
     if st.button("📈 Optimize Resume Score"):
         with st.spinner("Running Hill Climbing Optimization..."):
             try:
@@ -306,7 +312,7 @@ if "last_analysis" in st.session_state:
                 missing = analysis.get('missing_keywords', [])
                 jd_text = st.session_state.job_text_cache
                 
-                results = ai_optimizer.hill_climbing_optimize(found, missing, jd_text)
+                results = ai_optimizer.hill_climbing_optimize(found, missing, jd_text, max_extra_keywords=max_k, target_score=tgt_s)
                 st.session_state.optimization_results = results
                 st.rerun()
             except Exception as e:
