@@ -203,7 +203,6 @@ if analyze_button and resume_file and jd_file:
                 
                 analysis = analyze_resume(resume_text, job_text)
                 st.session_state.last_analysis = analysis
-                st.balloons()
             except Exception as e:
                 st.error(f"⚠️ {str(e)}")
 
