@@ -1,4 +1,5 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import json
 import os
 
@@ -22,15 +23,19 @@ def get_keyword_weights(found_keywords, missing_keywords, job_description):
     Example: {{"Python": 10, "Excel": 3}}
     """
     
-    model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
+    api_key = os.environ.get("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
         weights = json.loads(response.text)
-        # Ensure all keywords have a weight (default to 1)
         return {k: weights.get(k, 1) for k in all_keywords}
     except Exception as e:
         print(f"Error getting weights: {e}")
-        return {k: 5 for k in all_keywords} # Default fallback
+        return {k: 5 for k in all_keywords}
 
 def calculate_score(current_keywords, weights, total_possible_weight):
     if not total_possible_weight:
